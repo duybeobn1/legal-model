@@ -37,6 +37,28 @@ Các giá trị document_kind PDF:
 - pdf_mixed: có cả hai loại trang;
 - pdf_empty: PDF không có trang.
 
+## OCR PDF scan
+
+Cài PaddleOCR trong môi trường đã cài PaddlePaddle GPU tương ứng với driver:
+
+~~~bash
+python -m pip install -r requirements-ocr.txt
+~~~
+
+Chạy OCR cho một PDF:
+
+~~~bash
+mkdir -p data/ocr/20260515093231
+python scripts/ocr_pipeline.py \
+  --input data/inbox/20260515093231.pdf \
+  --output-dir data/ocr/20260515093231 \
+  --device gpu \
+  --lang vi
+~~~
+
+Pipeline tạo document.json, từng page-XXXX.json và ảnh trang đã render.
+Nó dừng ngay nếu yêu cầu GPU nhưng PaddlePaddle không có CUDA.
+
 ## Chạy test
 
 ~~~bash

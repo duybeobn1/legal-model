@@ -9,6 +9,7 @@ data/inbox/
 data/raw/
 data/processed/
 data/manifests/
+data/ocr/
 artifacts/
 tmp/
 
