@@ -173,6 +173,8 @@ def build_ocr(lang: str, device: str, use_orientation: bool) -> Any:
 
     return PaddleOCR(
         lang=lang,
+        ocr_version="PP-OCRv5",
+        text_recognition_model_name="PP-OCRv5_mobile_rec",
         device=device,
         engine="paddle",
         use_doc_orientation_classify=use_orientation,
@@ -215,6 +217,9 @@ def process_pdf(
         "lang": lang,
         "dpi": dpi,
         "ocr_engine": "PaddleOCR",
+        "ocr_version": "PP-OCRv5",
+        "text_recognition_model": "PP-OCRv5_mobile_rec",
+        "orientation_enabled": use_orientation,
         "status": "ok",
         "page_count": len(page_records),
         "pages": [],

@@ -59,6 +59,21 @@ python scripts/ocr_pipeline.py \
 Pipeline tạo document.json, từng page-XXXX.json và ảnh trang đã render.
 Nó dừng ngay nếu yêu cầu GPU nhưng PaddlePaddle không có CUDA.
 
+Mặc định pipeline dùng PP-OCRv5 với model recognition multilingual tương ứng
+với `lang=vi`, đồng thời tắt orientation/unwarping để tránh nhận nhầm dấu hoặc
+chữ xoay thành nội dung chính. Chỉ bật orientation cho tài liệu có trang bị
+xoay thực sự:
+
+~~~bash
+python scripts/ocr_pipeline.py \\
+  --input data/inbox/20260515093231.pdf \\
+  --output-dir data/ocr/20260515093231-orientation \\
+  --device gpu \\
+  --lang vi \\
+  --dpi 300 \\
+  --use-orientation
+~~~
+
 ## Chạy test
 
 ~~~bash
