@@ -1,0 +1,354 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\setsansfont{Arial}
+\usepackage{polyglossia}
+\setdefaultlanguage{vietnamese}
+\usepackage[a4paper,top=1.75cm,bottom=1.7cm,left=1.8cm,right=1.8cm]{geometry}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{listings}
+\setlength{\emergencystretch}{3em}
+\sloppy
+
+\definecolor{navy}{HTML}{17365D}
+\definecolor{bluegray}{HTML}{EAF1F8}
+\definecolor{ink}{HTML}{1F2937}
+\definecolor{green}{HTML}{EAF6EE}
+\definecolor{orange}{HTML}{FFF4E5}
+
+\hypersetup{colorlinks=true,linkcolor=navy,urlcolor=navy,pdftitle={Draft plan fine-tune Qwen3-14B}}
+\setlist[itemize]{leftmargin=1.25em,itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{leftmargin=1.45em,itemsep=3pt,topsep=3pt}
+\pagestyle{fancy}
+\setlength{\headheight}{14pt}
+\fancyhf{}
+\lhead{Local Legal AI}
+\rhead{Draft Qwen3-14B}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+
+\newcommand{\callout}[2]{%
+  \vspace{4pt}\noindent\fcolorbox{navy}{#1}{\parbox{0.95\linewidth}{#2}}\vspace{5pt}}
+
+\begin{document}
+
+\begin{titlepage}
+\thispagestyle{empty}
+\vspace*{1.2cm}
+{\sffamily\color{navy}\Large LOCAL LEGAL AI PROJECT\par}
+\vspace{1.2cm}
+{\sffamily\color{navy}\Huge\bfseries Draft kế hoạch fine-tune\par}
+\vspace{0.25cm}
+{\sffamily\color{ink}\huge Qwen3-14B\par}
+\vspace{0.8cm}
+{\large Offline với Ollama, OCR tài liệu pháp lý và RAG có dẫn nguồn\par}
+\vfill
+\callout{bluegray}{\textbf{Mục tiêu của draft này:} chỉ dùng Qwen3-14B làm LLM sinh văn bản; tận dụng 16 GB VRAM và 32 GB RAM; rút gọn hand-labeling bằng dữ liệu tự động có kiểm soát, nhưng vẫn giữ một bộ đánh giá vàng do chuyên gia pháp lý duyệt.}
+\vfill
+\begin{tabular}{@{}ll@{}}
+\textbf{Phiên bản:} & Draft 0.1\\
+\textbf{Thời gian mục tiêu:} & 1 tuần đến vài tháng tùy mức nghiệm thu\\
+\textbf{Phạm vi:} & Tóm tắt, trích xuất, tra cứu luật, bản nháp Word/Excel\\
+\textbf{Môi trường:} & Local, offline, Ollama
+\end{tabular}
+\vspace*{1.3cm}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{Kết luận điều hành}
+
+Với RTX 5060 Ti 16 GB và RAM 32 GB, chọn Qwen3-14B quantized làm model duy nhất là khả thi cho triển khai một người dùng hoặc tải thấp. Bản Q4 nên là cấu hình vận hành; bản Q5 chỉ dùng sau khi đo tốc độ và VRAM thực tế. Context nên bắt đầu ở 8K-16K, không mặc định 128K.
+
+Không pretrain từ đầu. Lộ trình nhanh nhất là:
+
+\begin{enumerate}
+  \item dựng baseline Qwen3-14B + RAG + OCR;
+  \item tạo phần lớn dữ liệu huấn luyện bằng template, trích xuất có cấu trúc và synthetic instruction;
+  \item chỉ hand-label một bộ nhỏ để đo chất lượng, hiệu chỉnh và làm test kín;
+  \item fine-tune một LoRA adapter Qwen3-14B;
+  \item đóng gói adapter vào Ollama và nghiệm thu trên các vụ án chưa từng xuất hiện trong train.
+\end{enumerate}
+
+\callout{green}{\textbf{Khuyến nghị chốt:} fine-tune model cho hành vi, format, thuật ngữ và quy trình; đưa luật hiện hành, hồ sơ và tình tiết vụ án vào kho RAG có version, source, page và quyền truy cập. Không đưa bí mật của từng vụ án vào trọng số model.}
+
+\section{Phạm vi và giả định phần cứng}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{3.6cm}X@{}}
+LLM & Qwen3-14B Instruct, Q4 trước; Q5 nếu benchmark cho phép.\\
+GPU & RTX 5060 Ti, 16 GB VRAM; chạy tuần tự OCR và LLM để tránh tranh chấp VRAM.\\
+RAM & 32 GB; đủ cho một tiến trình LLM quantized, index và dịch vụ nhẹ; hạn chế đồng thời.\\
+SSD & 1 TB chỉ phù hợp prototype. Dữ liệu lớn cần 2-4 TB hoặc kho nội bộ mã hóa.\\
+Runtime & Ollama cho inference; Transformers + TRL + PEFT cho fine-tune; Python cho ingestion và render.\\
+Đầu ra & JSON có schema, sau đó render sang DOCX/XLSX bằng code xác định.
+\end{tabularx}
+
+\section{Kiến trúc tối giản nhưng đủ nghiêm ngặt}
+
+\begin{center}
+\fbox{\parbox{0.94\linewidth}{\centering
+PDF/DOCX \ $\rightarrow$ \ đọc text hoặc OCR \ $\rightarrow$ \ chuẩn hóa + provenance\\[2pt]
+$\downarrow$\\[-2pt]
+BM25 + vector search \ $\rightarrow$ rerank \ $\rightarrow$ Qwen3-14B \ $\rightarrow$ JSON + citations\\[2pt]
+$\downarrow$\\[-2pt]
+Word/Excel renderer \ $\rightarrow$ kiểm tra của kiểm sát viên
+}}
+\end{center}
+
+\subsection{Các thành phần}
+
+\begin{itemize}
+  \item OCR text: PP-OCRv6 hoặc PP-OCRv5 với tiếng Việt.
+  \item Layout/table: PP-StructureV3 hoặc PaddleOCR-VL-1.6.
+  \item Retrieval: BM25/FTS5 cho số điều, số văn bản, tên riêng; BGE-M3 cho dense/sparse retrieval.
+  \item Reranking: BGE reranker v2-m3 hoặc Qwen3-Reranker-0.6B nếu môi trường hỗ trợ.
+  \item LLM: Qwen3-14B Q4 với temperature thấp, output có cấu trúc.
+  \item Rendering: python-docx và openpyxl; mọi trường xuất ra phải validate trước khi ghi file.
+\end{itemize}
+
+\section{Dữ liệu: làm nhiều bằng tự động, giữ ít nhãn vàng}
+
+\subsection{Ba lớp dữ liệu}
+
+\begin{enumerate}
+  \item \textbf{Kho nguồn:} luật, nghị định, thông tư, nghị quyết, án lệ, hướng dẫn nghiệp vụ được phép sử dụng, hồ sơ và mẫu biểu. Mỗi file có hash, nguồn, cơ quan ban hành, ngày hiệu lực, trạng thái và quyền truy cập.
+  \item \textbf{Dữ liệu tự động:} sinh câu hỏi-trả lời từ đoạn nguồn, tạo tóm tắt từ template, trích xuất entity bằng rule/regex, tạo bảng dòng thời gian từ ngày tháng và đánh dấu trích dẫn tự động.
+  \item \textbf{Dữ liệu vàng:} một tập nhỏ do chuyên gia kiểm tra để làm benchmark, sửa prompt, kiểm tra hallucination và chọn checkpoint. Không cần label toàn bộ kho.
+\end{enumerate}
+
+\subsection{Mức hand-label tối thiểu đề xuất}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{4.0cm}X>{\bfseries}p{2.2cm}@{}}
+Hạng mục & Cách giảm công sức & Mức tối thiểu\\
+OCR & Dùng OCR sẵn; chỉ sửa trực tiếp các trang khó và trường quan trọng & 30-50 trang\\
+Retrieval luật & Chuyên gia chọn nguồn đúng cho câu hỏi mẫu; sinh hard negatives bằng tìm kiếm gần nghĩa & 100-200 câu\\
+Tóm tắt/trích xuất & Template + dữ liệu tự động; duyệt mẫu đại diện theo loại tài liệu & 100-200 mẫu\\
+Mâu thuẫn lời khai & Chỉ đánh dấu cặp trích dẫn và loại mâu thuẫn, không kết luận thật/sai & 30-50 cặp\\
+Output Word/Excel & Duyệt schema và 10-20 file render đại diện & 10-20 file\\
+Blind test & Chuyên gia giữ kín, người train không xem trước & 50-100 câu/vụ việc
+\end{tabularx}
+
+Đây là mức cho một pilot có kiểm soát, không phải cam kết chất lượng cho mọi loại hồ sơ. Nếu dùng trong quyết định nghiệp vụ quan trọng, tăng bộ test thay vì cố giảm nhãn xuống bằng không.
+
+\subsection{Cách tạo dữ liệu tự động an toàn}
+
+\begin{itemize}
+  \item Từ mỗi điều/khoản đã xác minh, sinh câu hỏi về nội dung, điều kiện áp dụng, ngoại lệ và văn bản liên quan.
+  \item Từ mỗi tài liệu, tạo bản tóm tắt bằng template dựa trên heading, mốc thời gian và đoạn trích; không để model tự bịa nguồn.
+  \item Dùng rule để lấy số văn bản, ngày, tiền, tên và số điều; model chỉ chuẩn hóa hoặc giải thích.
+  \item Tạo ví dụ từ chối: không có nguồn, nguồn mâu thuẫn, văn bản hết hiệu lực, OCR confidence thấp.
+  \item Chỉ đưa vào train các mẫu vượt qua validator: JSON hợp lệ, citation tồn tại, page tồn tại và không có trường ngoài schema.
+  \item Lấy mẫu ngẫu nhiên 5-10\% để chuyên gia spot-check; các mẫu lỗi dùng làm hard negative hoặc regression test.
+\end{itemize}
+
+\section{Fine-tune Qwen3-14B trong thời gian ngắn}
+
+\subsection{Không làm}
+
+\begin{itemize}
+  \item Không train từ đầu.
+  \item Không full fine-tune 14B trên máy này.
+  \item Không train trên dữ liệu thô chưa ẩn danh.
+  \item Không dùng output chưa kiểm tra của model làm “sự thật pháp lý”.
+  \item Không trộn vụ án vào train/test theo từng trang; phải split theo case ID.
+\end{itemize}
+
+\subsection{Cấu hình khởi đầu}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{4.3cm}X@{}}
+Base & Qwen/Qwen3-14B Instruct.\\
+Phương pháp & QLoRA/LoRA; giữ base frozen, train adapter.\\
+Quantization & 4-bit trong lúc train; inference Q4 trong Ollama.\\
+Context & 4096 token để bắt đầu; tăng lên 8192 nếu không OOM và chất lượng có lợi.\\
+LoRA & r=16, alpha=32, dropout=0.05; target q/k/v/o projection.\\
+Batch & batch vật lý 1; gradient accumulation 8-16.\\
+Epoch & 1 epoch trước; chọn checkpoint theo validation, không theo train loss.\\
+Mục tiêu & format, citation, phân biệt dữ kiện/suy luận, refusal, template nghiệp vụ.
+\end{tabularx}
+
+\subsection{Dữ liệu train nên chia}
+
+\begin{itemize}
+  \item 40\% tóm tắt và trích xuất có cấu trúc.
+  \item 25\% grounded QA về luật và hồ sơ.
+  \item 15\% dòng thời gian, bảng và kiểm tra tài liệu thiếu.
+  \item 10\% phát hiện mâu thuẫn, luôn trích dẫn hai phía.
+  \item 10\% refusal, uncertainty, prompt injection từ tài liệu và lỗi OCR.
+\end{itemize}
+
+Không cần ép tỷ lệ này nếu task thực tế khác; đây chỉ là điểm khởi đầu để tránh train quá nhiều hội thoại chung chung.
+
+\subsection{Khung code train}
+
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,frame=single,rulecolor=\color{bluegray},breaklines=true]
+from datasets import load_dataset
+from peft import LoraConfig
+from trl import SFTConfig, SFTTrainer
+
+base = "Qwen/Qwen3-14B"
+ds = load_dataset("json", data_files={
+    "train": "data/sft/train.jsonl",
+    "validation": "data/sft/validation.jsonl",
+})
+
+peft = LoraConfig(
+    r=16, lora_alpha=32, lora_dropout=0.05,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    task_type="CAUSAL_LM",
+)
+args = SFTConfig(
+    output_dir="artifacts/qwen3-14b-legal-lora",
+    num_train_epochs=1,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=16,
+    learning_rate=2e-4,
+    max_length=4096,
+    eval_strategy="steps", eval_steps=100,
+    save_steps=100, bf16=True, logging_steps=10,
+)
+trainer = SFTTrainer(
+    model=base, args=args,
+    train_dataset=ds["train"],
+    eval_dataset=ds["validation"],
+    peft_config=peft,
+)
+trainer.train()
+trainer.save_model()
+\end{lstlisting}
+
+Nếu VRAM không đủ, giảm lần lượt max length, LoRA target modules,
+gradient checkpointing/batch; không vội chuyển sang model nhỏ hơn vì
+draft này cố định 14B. Kiểm tra chat template và phiên bản
+Transformers/TRL/PEFT trước khi chạy.
+
+\section{OCR: không fine-tune trong draft đầu}
+
+\subsection{Pipeline}
+
+\begin{enumerate}
+  \item Phát hiện PDF có text layer.
+  \item Dùng text trực tiếp nếu chất lượng đạt ngưỡng; vẫn giữ số trang.
+  \item Với PDF ảnh, render 250-300 DPI rồi OCR tiếng Việt.
+  \item Với bảng/con dấu/bố cục, chạy layout parser và lưu JSON/Markdown cùng ảnh crop.
+  \item Gắn confidence, page number, bounding box, model version.
+  \item Đưa vùng confidence thấp hoặc trường quan trọng vào danh sách kiểm tra.
+\end{enumerate}
+
+Chỉ fine-tune OCR sau khi có bằng chứng lỗi hệ thống trên bộ test: chữ viết tay, scan cũ, dấu che chữ, font địa phương, bảng biểu hoặc ký tự pháp lý thường bị nhầm. Handwriting recognition nên xem là một nhánh riêng.
+
+\section{Timeline từ 1 tuần đến vài tháng}
+
+\begin{longtable}{@{}p{2.0cm}p{4.1cm}p{8.0cm}@{}}
+\toprule
+\textbf{Thời gian} & \textbf{Mục tiêu} & \textbf{Việc phải hoàn thành}\\
+\midrule
+1 tuần & Smoke test & Cài Ollama; chạy Qwen3-14B Q4; benchmark 20-30 câu; kiểm tra 10 PDF text và 10 PDF scan; chốt schema và prompt strict.\\
+2-3 tuần & Pilot usable & Ingestion, OCR, provenance, BM25 + vector, citation, JSON renderer, 100-200 mẫu dữ liệu tự động và bộ vàng nhỏ.\\
+4-8 tuần & Fine-tune adapter & QLoRA 14B, validation, regression set, refusal và mâu thuẫn lời khai; so sánh base với adapter.\\
+2-3 tháng & Final pilot & Mở rộng nhóm tội/tài liệu; thêm hard negatives, reranking, quyền truy cập, audit log, DOCX/XLSX QA.\\
+3-6 tháng & Nghiệm thu hạn chế & Blind test do kiểm sát viên giữ; đánh giá theo loại tài liệu; triển khai giới hạn với human sign-off bắt buộc.\\
+\bottomrule
+\end{longtable}
+
+Nếu chỉ có một tuần, bản giao được nên là baseline RAG + OCR + prompt strict, chưa gọi là final fine-tune. Fine-tune nhanh không thể thay thế kiểm thử nguồn và quy trình nghiệp vụ.
+
+\section{Nghiệm thu tối thiểu}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{3.4cm}X@{}}
+OCR & Đo CER/WER và độ chính xác tên, ngày, số tiền, số điều, số văn bản; test riêng scan mờ và bảng.\\
+Retrieval & Recall@5/10 và citation correctness; bắt buộc có kết quả BM25 cho số điều/tên văn bản.\\
+Generation & Không bịa nguồn; phân biệt dữ kiện, quy định, suy luận và thiếu căn cứ.\\
+Mâu thuẫn & Hiển thị cả hai nguồn; không tự chọn phía đúng.\\
+File & JSON schema hợp lệ; DOCX/XLSX mở được và đúng mẫu.\\
+Bảo mật & Không lộ dữ liệu qua log; quyền theo vụ án; lưu model/prompt/source/page cho từng output.\\
+Người duyệt & Kiểm sát viên mở được bản gốc tới đúng trang trước khi sử dụng.
+\end{tabularx}
+
+\callout{orange}{\textbf{Điều kiện dừng:} nếu hệ thống không tìm được nguồn, nguồn mâu thuẫn, OCR không chắc chắn hoặc văn bản không xác định được hiệu lực, output phải chuyển sang trạng thái “cần kiểm tra thủ công”, không cố sinh kết luận.}
+
+\section{Đóng gói Ollama}
+
+Sau khi adapter đạt benchmark:
+
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,frame=single,rulecolor=\color{bluegray},breaklines=true]
+FROM qwen3:14b
+ADAPTER /absolute/path/to/qwen3-14b-legal-lora
+PARAMETER temperature 0.1
+PARAMETER num_ctx 16384
+SYSTEM """
+Bạn là trợ lý phân tích hồ sơ pháp lý offline.
+Chỉ dùng CONTEXT và nguồn được trích dẫn.
+Phân biệt dữ kiện, quy định, suy luận và điểm chưa đủ căn cứ.
+Không bịa điều luật, tình tiết, số liệu hoặc nguồn.
+"""
+\end{lstlisting}
+
+Base trong FROM phải đúng model đã dùng để train adapter. Chạy lại toàn bộ blind test sau khi import vào Ollama, vì adapter chạy được không đồng nghĩa với chất lượng nghiệp vụ.
+
+\section{Rủi ro pháp lý và quản trị}
+
+Hồ sơ vụ án, lời khai và dữ liệu về tội phạm/hành vi phạm tội cần được phân loại, ẩn danh hoặc giả danh theo quy trình được phê duyệt; bản gốc phải bất biến và có kiểm soát truy cập. Luật, văn bản sửa đổi và ngày hiệu lực phải được version hóa. Các yêu cầu này cần được bộ phận pháp chế/cơ quan có thẩm quyền xác nhận theo quy định hiện hành, trong đó có Luật Bảo vệ dữ liệu cá nhân số 91/2025/QH15 và Nghị định 356/2025/NĐ-CP.
+
+Không dùng output AI làm chứng cứ hoặc kết luận độc lập. Mỗi output nghiệp vụ phải lưu:
+
+\begin{itemize}
+  \item document hash, page, bounding box và OCR version;
+  \item nguồn RAG và thời điểm truy xuất;
+  \item model, adapter, prompt/template và thời gian chạy;
+  \item người kiểm tra, sửa đổi và phê duyệt.
+\end{itemize}
+
+\section{Cấu trúc thư mục và deliverables}
+
+\begin{lstlisting}[basicstyle=\ttfamily\scriptsize,frame=single,rulecolor=\color{bluegray}]
+legal-model/
+  data/
+    raw/ anonymized/ sft/ eval/
+  ingest/      # PDF, DOCX, manifest, hash
+  ocr/         # OCR, layout, confidence, page images
+  retrieval/   # BM25, embeddings, reranker
+  train/       # LoRA/QLoRA, configs, checkpoints
+  eval/        # OCR, retrieval, citation, regression
+  render/      # DOCX/XLSX from validated JSON
+  prompts/     # strict system prompts and schemas
+  artifacts/   # adapters, reports, model card
+  docs/        # SOP and legal review notes
+\end{lstlisting}
+
+Deliverables của phiên bản draft:
+
+\begin{enumerate}
+  \item Qwen3-14B base benchmark report.
+  \item OCR baseline report theo loại tài liệu.
+  \item LoRA adapter và training manifest.
+  \item Blind-test report do nhóm pháp lý xác nhận.
+  \item Prompt/schema/version manifest.
+  \item Ollama Modelfile.
+  \item Checklist bảo mật, quyền truy cập và quy trình human sign-off.
+\end{enumerate}
+
+\section{Nguồn tham khảo}
+
+\begin{itemize}
+  \item Qwen3 model card: \url{https://huggingface.co/Qwen/Qwen3-14B}
+  \item Qwen3 trên Ollama: \url{https://ollama.com/library/qwen3}
+  \item Ollama Modelfile và import adapter: \url{https://github.com/ollama/ollama/blob/main/docs/modelfile.mdx}
+  \item TRL/PEFT LoRA và QLoRA: \url{https://huggingface.co/docs/trl/peft_integration}
+  \item PaddleOCR PP-StructureV3: \url{https://www.paddleocr.ai/latest/en/version3.x/pipeline_usage/PP-StructureV3.html}
+  \item PaddleOCR-VL-1.6: \url{https://www.paddleocr.ai/main/en/version3.x/algorithm/PaddleOCR-VL/PaddleOCR-VL-1.6.html}
+  \item BGE-M3: \url{https://huggingface.co/BAAI/bge-m3}
+  \item Luật Bảo vệ dữ liệu cá nhân 91/2025/QH15: \url{https://vbpl.vn/TW/Pages/ivbpq-toanvan.aspx?ItemID=179252}
+  \item Bộ luật Tố tụng hình sự 101/2015/QH13: \url{https://vbpl.vn/FileData/TW/Lists/vbpq/Attachments/96172/VanBanGoc_101.2015.QH13.P1.pdf}
+\end{itemize}
+
+\end{document}

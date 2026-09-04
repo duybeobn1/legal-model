@@ -1,0 +1,23 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local data and generated indexes
+data/inbox/
+data/raw/
+data/processed/
+data/manifests/
+artifacts/
+tmp/
+
+# Local model weights
+*.gguf
+*.safetensors
+*.ckpt
+
+# Logs and local secrets
+*.log
+.env
+.env.*
